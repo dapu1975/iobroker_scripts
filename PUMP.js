@@ -9,6 +9,7 @@ ruthenbeck tcp4 remote control relay ->
 
 https://www.rutenbeck.de/fileadmin/user_upload/media/products/de/_db/ba/700802610_BA01.pdf
 ****************************************************************************/
+
 createState('PumpControl', false, {
     read: true,
     write: true,
@@ -25,25 +26,54 @@ createState('PumpState', false, {
     def: false
 });
 
-on({id: 'PumpControl', change: 'any', val: true, oldVal: false},
-    function (obj) {
-        // check if file is availiable
-   exec("python3 /home/pi/haydryer/tcp4/relay.py -i 192.168.10.85 -p 30303 -c 3 -s 1", function(err, stdout, stderr) {
-         if(err) log('Exec-Fehler: '+ stderr, 'error');
-         // else check output and set PumpState
-         if(stdout) log('Message: '+ stdout);
-         setState('PumpState', {val: true, ack: true});
-      });
-  }
-);
+createState('PumpCommError', false, {
+    read: true,
+    write: true,
+    desc: "true=error in communication, false=no error",
+    type: "boolean",
+    def: false
+});
 
-on({id: 'PumpControl', change: 'any', val: false, oldVal: true},
+/**
+* @param {string} priority
+* @param {string} message
+*/
+function sendmsg(priority = 'msg', message) {
+    switch (priority) {
+        case 'msg':
+            var prio = -1;
+        case 'warn':
+            var prio = 1;
+        case 'alert':
+            var prio = 2;
+    }
+    sendTo("pushover", {
+        message: '<font color=green>MsgPump: ' + message + '</font>.',
+        title: 'HayDryer',
+        priority: -1,
+        html: 1
+    });
+}
+
+on({id: 'PumpControl', change: 'any'},
     function (obj) {
-   exec("python3 /home/pi/haydryer/tcp4/relay.py -i 192.168.10.85 -p 30303 -c 3 -s 0", function(err, stdout, stderr) {
-         if(err) log('Exec-Fehler: '+ stderr, 'error');
-         // else check output and set PumpState
-         if(stdout) log('Message: '+ stdout);
-         setState('PumpState', {val: false, ack: true});         
-      });
-  }
+        if (obj.oldState.val == true || obj.state.val == false)
+            var newPumpState = '0';
+        if (obj.oldState.val == false || obj.state.val == true)
+            var newPumpState = '1';
+        log("newPumpState: " + newPumpState);
+        exec("python3 /home/pi/haydryer/tcp4/relay.py -i 192.168.10.85 -p 30303 -c 2 -s " + newPumpState , function(err, stdout, stderr) {
+            if(err) {
+                log('Exec-Fehler: '+ stderr, 'error');
+                sendmsg('alert', '<font color=red>' + stderr + '</font>.');
+                setState('PumpError', {val: true, ack: true});
+            } else {
+                log('Message: '+ stdout);
+                const ret_state = Boolean(parseInt(stdout.split("=")[1], 10));
+                setState('PumpState', {val: ret_state.valueOf(), ack: true});
+                sendmsg('msg', '<font color=green>' + stdout + '</font>.');
+                setState('PumpCommError', {val: false, ack: true});
+            }
+        });
+    }
 );
